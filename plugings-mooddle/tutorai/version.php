@@ -9,7 +9,7 @@
 defined('MOODLE_INTERNAL') || die();
 
 $plugin->component = 'block_tutorai';         // Nombre único del plugin
-$plugin->version   = 2026032401;              // YYYYMMDDXX — actualizar al modificar
+$plugin->version   = 2026032601;              // YYYYMMDDXX — actualizar al modificar
 $plugin->requires  = 2024100700;              // Moodle 4.5 mínimo (build 20241007)
 $plugin->maturity  = MATURITY_ALPHA;
 $plugin->release   = '1.0.0';
