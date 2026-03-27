@@ -2,6 +2,7 @@ const express  = require('express');
 const router   = express.Router();
 const crypto   = require('crypto');
 const db       = require('../services/database');
+const toolsRegistry = require('../services/tools/index');
 
 // ── Sesión simple en memoria ───────────────────────────────────────────
 const sessions = new Map();
@@ -132,6 +133,8 @@ function nav(active) {
   const links = [
     ['/', 'Métricas'],
     ['/config', 'Configuración'],
+    ['/moodle', 'Conexión Moodle'],
+    ['/tools', 'Herramientas'],
     ['/password', 'Contraseña'],
   ].map(([path, label]) =>
     `<a href="/admin${path}" class="${active===path?'active':''}">${label}</a>`
@@ -318,6 +321,121 @@ router.post('/password', requireAuth, (req, res) => {
   const session  = sessions.get(token);
   db.changeAdminPassword(session.username, password);
   res.redirect('/admin/password?saved=1');
+});
+
+
+module.exports = router;
+
+// Eliminar el module.exports anterior antes de agregar las nuevas rutas
+// ── Conexión Moodle ────────────────────────────────────────────────────
+router.get('/moodle', requireAuth, (req, res) => {
+  const cfg = db.getAllConfig();
+  const msg = req.query.saved
+    ? '<div class="alert alert-success">Configuración guardada</div>'
+    : req.query.error
+    ? '<div class="alert alert-error">Error al verificar el token</div>'
+    : '';
+
+  res.send('<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">' +
+  '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+  '<title>Moodle — Coach Angela</title>' +
+  '<style>' + SHARED_CSS + '</style></head><body>' +
+  nav('/moodle') +
+  '<div class="container">' +
+  '<div class="page-title">Conexión con Moodle</div>' +
+  '<div class="page-sub">Configura el acceso a la API REST de Moodle para las herramientas del agente</div>' +
+  msg +
+  '<div class="section" style="max-width:560px">' +
+  '<form method="POST" action="/admin/moodle">' +
+  '<div class="form-group"><label>URL de Moodle</label>' +
+  '<input type="text" name="moodle_url" value="' + (cfg.moodle_url||'') + '" placeholder="https://campusvirtual.edu.co">' +
+  '<div class="hint">Sin barra al final.</div></div>' +
+  '<div class="form-group"><label>Token de acceso</label>' +
+  '<input type="password" name="moodle_token" placeholder="' + (cfg.moodle_token ? '(token guardado — dejar vacío para no cambiar)' : 'Pega el token aquí') + '">' +
+  '<div class="hint">Generado en Moodle → Admin → Usuarios → Tokens de servicio web → TutorAI Service.</div></div>' +
+  '<div style="display:flex;gap:10px;align-items:center">' +
+  '<button class="btn btn-primary" type="submit">Guardar</button>' +
+  '<a href="/admin/moodle/test" class="btn" style="background:#f0f0ee;color:#444;text-decoration:none" target="_blank">Probar conexión</a>' +
+  '</div></form></div></div></body></html>');
+});
+
+router.post('/moodle', requireAuth, (req, res) => {
+  const { moodle_url, moodle_token } = req.body;
+  if (moodle_url)  db.setConfig('moodle_url',   moodle_url.trim().replace(/\/+$/, ''));
+  if (moodle_token && moodle_token.length > 10) db.setConfig('moodle_token', moodle_token.trim());
+  res.redirect('/admin/moodle?saved=1');
+});
+
+router.get('/moodle/test', requireAuth, async (req, res) => {
+  try {
+    const moodleApi = require('../services/moodleApi');
+    // core_course_get_contents no requiere permisos especiales
+    const data = await moodleApi.call('core_course_get_contents', { courseid: 1 });
+    const cfg = db.getAllConfig();
+    const courseName = data?.[0]?.name || 'OK';
+    res.json({ ok: true, moodle_url: cfg.moodle_url, message: 'Conexion exitosa — primera seccion: ' + courseName });
+  } catch (err) {
+    // "invalidparameter" o "not found" = llego al servidor, token valido, curso 1 no existe
+    if (err.message && (err.message.includes('invalidparameter') || err.message.includes('not found') || err.message.includes('no valid'))) {
+      const cfg = db.getAllConfig();
+      res.json({ ok: true, moodle_url: cfg.moodle_url, message: 'Conexion exitosa con la API de Moodle' });
+    } else {
+      res.json({ ok: false, error: err.message });
+    }
+  }
+});
+
+// ── Herramientas ───────────────────────────────────────────────────────
+router.get('/tools', requireAuth, (req, res) => {
+  const allTools = toolsRegistry.getAllToolNames();
+  const disabled = toolsRegistry.getDisabledTools();
+  const msg = req.query.saved ? '<div class="alert alert-success">Guardado</div>' : '';
+
+  const toolInfo = {
+    get_assignments:     { label: 'Tareas',          desc: 'Fechas de entrega, estado y calificación' },
+    get_grades:          { label: 'Calificaciones',  desc: 'Notas detalladas por actividad' },
+    get_calendar_events: { label: 'Calendario',      desc: 'Próximos eventos y exámenes' },
+    get_quizzes:         { label: 'Cuestionarios',   desc: 'Exámenes disponibles e intentos' },
+    get_course_progress: { label: 'Progreso',        desc: 'Avance detallado sección por sección' },
+  };
+
+  const rows = allTools.map(name => {
+    const isActive = !disabled.includes(name);
+    const info = toolInfo[name] || { label: name, desc: '' };
+    return '<tr>' +
+      '<td><strong>' + info.label + '</strong><div style="font-size:12px;color:#888;margin-top:2px">' + name + '</div></td>' +
+      '<td style="color:#666;font-size:13px">' + info.desc + '</td>' +
+      '<td><form method="POST" action="/admin/tools/toggle" style="display:inline">' +
+      '<input type="hidden" name="tool" value="' + name + '">' +
+      '<input type="hidden" name="enabled" value="' + (isActive ? '0' : '1') + '">' +
+      '<button class="btn btn-sm ' + (isActive ? 'btn-danger' : 'btn-primary') + '" type="submit">' +
+      (isActive ? 'Desactivar' : 'Activar') + '</button></form></td></tr>';
+  }).join('');
+
+  res.send('<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">' +
+  '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+  '<title>Herramientas — Coach Angela</title>' +
+  '<style>' + SHARED_CSS + '</style></head><body>' +
+  nav('/tools') +
+  '<div class="container">' +
+  '<div class="page-title">Herramientas del agente</div>' +
+  '<div class="page-sub">Controla qué información puede consultar Coach Angela desde Moodle</div>' +
+  msg +
+  '<div class="section"><table>' +
+  '<thead><tr><th>Herramienta</th><th>Descripción</th><th style="width:120px">Estado</th></tr></thead>' +
+  '<tbody>' + rows + '</tbody></table></div>' +
+  '<div class="section" style="background:#fafaf8;border:1px solid #eee">' +
+  '<div class="section-title">¿Cómo funciona?</div>' +
+  '<p style="font-size:13.5px;color:#555;line-height:1.7">Coach Angela decide automáticamente qué herramientas usar según la pregunta del estudiante. ' +
+  'Por ejemplo, si pregunta <em>"¿cuándo vence mi tarea?"</em>, el agente consulta <strong>Tareas</strong> y responde con la fecha exacta desde Moodle. ' +
+  'Las herramientas desactivadas no estarán disponibles.</p>' +
+  '</div></div></body></html>');
+});
+
+router.post('/tools/toggle', requireAuth, (req, res) => {
+  const { tool, enabled } = req.body;
+  toolsRegistry.setToolEnabled(tool, enabled === '1');
+  res.redirect('/admin/tools?saved=1');
 });
 
 module.exports = router;

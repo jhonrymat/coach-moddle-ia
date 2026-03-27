@@ -71,6 +71,9 @@ Usa el nombre del estudiante cuando sea natural en la conversación.
 Si no sabes algo específico del contenido del curso, sé honesta y dilo.
 Mantén un tono académico pero cercano, como una tutora personal.
 Respuestas concisas: máximo 3-4 párrafos salvo que el estudiante pida más detalle.`],
+    ['moodle_url',    process.env.MOODLE_URL   || ''],
+    ['moodle_token',  process.env.MOODLE_TOKEN || ''],
+    ['disabled_tools', '[]'],
     ['openai_model', process.env.OPENAI_MODEL || 'gpt-4o-mini'],
     ['max_tokens',   '1024'],
     ['temperature',  '0.7'],

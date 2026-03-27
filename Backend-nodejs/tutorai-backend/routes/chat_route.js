@@ -23,16 +23,20 @@ router.post('/chat', chatLimiter, verifySignature, async (req, res) => {
   if (Math.abs(Date.now() / 1000 - timestamp) > 300)
     return res.status(401).json({ success: false, error: 'expired_request' });
 
-  const userId    = context.user.id;
-  const courseId  = context.course.id;
-  const userName  = (context.user.firstname + ' ' + context.user.lastname).trim();
+  const userId     = context.user.id;
+  const courseId   = context.course.id;
+  const userName   = (context.user.firstname + ' ' + context.user.lastname).trim();
   const courseName = context.course.fullname || '';
   const maxHistory = parseInt(process.env.MAX_HISTORY || '20');
 
   try {
     const history      = db.getHistory(userId, courseId, maxHistory);
     const systemPrompt = buildSystemPrompt(context);
-    const { reply, tokensUsed, model } = await openaiChat(systemPrompt, history, message.trim());
+
+    // Pasar contexto completo para que las tools puedan usarlo
+    const { reply, tokensUsed, model } = await openaiChat(
+      systemPrompt, history, message.trim(), context
+    );
 
     db.saveMessage(userId, courseId, 'user',      message.trim(), userName, courseName);
     db.saveMessage(userId, courseId, 'assistant', reply,          userName, courseName);
@@ -43,6 +47,8 @@ router.post('/chat', chatLimiter, verifySignature, async (req, res) => {
     console.error('[chat] Error:', err.message);
     if (err.message?.includes('API key'))
       return res.status(500).json({ success: false, error: 'ai_misconfigured' });
+    if (err.message?.includes('token no configurado') || err.message?.includes('URL'))
+      return res.status(500).json({ success: false, error: 'moodle_not_configured' });
     if (err.status === 429)
       return res.status(429).json({ success: false, error: 'ai_rate_limit' });
     return res.status(500).json({ success: false, error: 'internal_error' });
